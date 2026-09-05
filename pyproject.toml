@@ -1,0 +1,38 @@
+[project]
+name = "ncaaf-clv"
+version = "0.1.0"
+description = "NCAAF handicapping data pipeline: ESPN games/teams + Overtime.ag odds, joined and validated for closing-line-value analysis."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "httpx>=0.27",
+    "python-dotenv>=1.0",
+    "tzdata>=2024.1",  # zoneinfo on Windows has no system tz database
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "ruff>=0.5"]
+
+[project.scripts]
+ncaaf-clv = "ncaaf_clv.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ncaaf_clv"]
+
+[tool.uv]
+package = true
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

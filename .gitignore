@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+data/raw/espn/
+data/processed/
+.pytest_cache/
+.ruff_cache/
+data/*.db
+data/*.db-wal
+data/*.db-shm
+data/*.tar.gz
