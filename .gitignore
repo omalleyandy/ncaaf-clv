@@ -10,3 +10,4 @@ data/*.db
 data/*.db-wal
 data/*.db-shm
 data/*.tar.gz
+data/raw/accuweather/

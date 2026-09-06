@@ -59,12 +59,16 @@ def load_espn_snapshot(conn: sqlite3.Connection, espn_dir: Path) -> dict[str, in
     counts["espn_game_teams"] = insert_rows(conn, "espn_game_teams", sb["game_teams"])
     counts["espn_odds"] = insert_rows(conn, "espn_odds", sb["espn_odds"])
 
-    dims = read_json(espn_dir / "teams.json")
-    snap = dims["meta"]["snapshot_utc"]
-    counts["espn_teams"] = insert_rows(conn, "espn_teams", dims["teams"])
-    counts["espn_conferences"] = insert_rows(
-        conn, "espn_conferences", [{"snapshot_utc": snap, **c} for c in dims["conferences"]]
-    )
+    teams_path = espn_dir / "teams.json"
+    if teams_path.exists():  # refresh snapshots carry no team dimension
+        dims = read_json(teams_path)
+        snap = dims["meta"]["snapshot_utc"]
+        # All-star / exhibition squads (is_program=false) stay in teams.json for the resolver's
+        # ambiguity check but are not real programs, so they are not loaded into espn_teams.
+        counts["espn_teams"] = insert_rows(conn, "espn_teams", [t for t in dims["teams"] if t.get("is_program", True)])
+        counts["espn_conferences"] = insert_rows(
+            conn, "espn_conferences", [{"snapshot_utc": snap, **c} for c in dims["conferences"]]
+        )
 
     for gdir in sorted((espn_dir / "games").glob("*/")):
         if not (gdir / "gamecast.json").exists():
@@ -131,3 +135,20 @@ def load_validation(conn: sqlite3.Connection, report_json: Path) -> int:
     n = insert_rows(conn, "validation_checks", [{"snapshot_utc": snap, **c} for c in payload["checks"]])
     conn.commit()
     return n
+
+
+def load_weather_locations(conn: sqlite3.Connection, registry_json: Path) -> int:
+    payload = read_json(registry_json)
+    n = insert_rows(conn, "weather_locations", payload["venues"])
+    conn.commit()
+    return n
+
+
+def load_weather_snapshot(conn: sqlite3.Connection, weather_json: Path) -> dict[str, int]:
+    payload = read_json(weather_json)
+    counts = {
+        "weather_hourly": insert_rows(conn, "weather_hourly", payload["hourly"]),
+        "weather_game_window": insert_rows(conn, "weather_game_window", payload["game_window"]),
+    }
+    conn.commit()
+    return counts

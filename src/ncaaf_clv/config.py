@@ -20,6 +20,18 @@ REGULAR_SEASON_TYPE = 2
 
 SOURCE_ESPN = "espn"
 SOURCE_OVERTIME = "overtime_ag"
+SOURCE_ACCUWEATHER_FORECAST = "accuweather_forecast"  # forecasts/v1/hourly, snapshotted before kickoff
+SOURCE_ACCUWEATHER_OBSERVED = "accuweather_observed"  # currentconditions/v1/.../historical/24, after the game
+
+ACCUWEATHER_BASE_URL = "https://dataservice.accuweather.com"
+ACCUWEATHER_HOURLY_HORIZONS = (
+    1,
+    12,
+    24,
+    72,
+    120,
+    240,
+)  # hours; 12 on the free/starter tier, longer ones are plan-gated
 
 
 def _env(name: str, default: str) -> str:
@@ -44,6 +56,25 @@ class Settings:
     # empty = use httpx's default "python-httpx/<ver>", which is accepted.
     espn_user_agent: str = field(default_factory=lambda: _env("ESPN_USER_AGENT", ""))
 
+    # AccuWeather (stadium hourly forecasts). The key is read from ACCUWEATHER_API_KEY (unprefixed, as the
+    # user's other projects name it) or NCAAF_CLV_ACCUWEATHER_API_KEY.
+    accuweather_api_key: str = field(
+        default_factory=lambda: os.environ.get("ACCUWEATHER_API_KEY") or _env("ACCUWEATHER_API_KEY", "")
+    )
+    accuweather_base_url: str = field(default_factory=lambda: _env("ACCUWEATHER_BASE_URL", ACCUWEATHER_BASE_URL))
+    accuweather_hourly_hours: int = field(default_factory=lambda: int(_env("ACCUWEATHER_HOURLY_HOURS", "12")))
+    accuweather_rate_limit_per_s: float = field(
+        default_factory=lambda: float(_env("ACCUWEATHER_RATE_LIMIT_PER_S", "1"))
+    )
+    accuweather_call_budget: int = field(default_factory=lambda: int(_env("ACCUWEATHER_CALL_BUDGET", "0")))  # 0 = none
+    weather_pre_kickoff_hours: float = field(default_factory=lambda: float(_env("WEATHER_PRE_KICKOFF_HOURS", "1")))
+    weather_game_duration_hours: float = field(
+        default_factory=lambda: float(_env("WEATHER_GAME_DURATION_HOURS", "3.5"))
+    )
+    weather_locations_file: Path = field(
+        default_factory=lambda: Path(_env("WEATHER_LOCATIONS_FILE", "data/reference/stadium_locations.json"))
+    )
+
     # Derived paths
     @property
     def raw_espn_dir(self) -> Path:
@@ -56,6 +87,10 @@ class Settings:
     @property
     def processed_dir(self) -> Path:
         return self.data_dir / "processed"
+
+    @property
+    def raw_weather_dir(self) -> Path:
+        return self.data_dir / "raw" / "accuweather"
 
 
 def load_settings(dotenv_path: str | os.PathLike[str] | None = None) -> Settings:
