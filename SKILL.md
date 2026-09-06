@@ -26,6 +26,8 @@ uv run ncaaf-clv run data/raw/overtime/ncaaf_lines_<snap>.json
 uv run ncaaf-clv backfill --years 2021-2025 --weeks 1-15 --db data/ncaaf_clv.db
 # through the week: re-collect games not yet final (appends a refresh-<snap> snapshot; v_espn_games_latest = current state)
 uv run ncaaf-clv refresh --db data/ncaaf_clv.db          # --dry-run lists the open games
+# self-contained HTML replay of any collected game (animated field, scoreboard, drive chart, win %); --all for the snapshot
+uv run ncaaf-clv replay --espn-snapshot refresh-<snap> --game-id <espn game id> --open
 # weather (ACCUWEATHER_API_KEY in .env): registry once, then pre-game forecast + morning-after observations
 uv run ncaaf-clv weather locations --db data/ncaaf_clv.db
 uv run ncaaf-clv weather forecast  --db data/ncaaf_clv.db      # games in the next 12 h (starter tier horizon)

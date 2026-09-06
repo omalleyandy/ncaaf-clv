@@ -50,6 +50,8 @@ ncaaf-clv/
 │   ├── weather/parse.py      hourly forecast / observation items -> rows keyed on game_id + team ids; window aggregates
 │   ├── weather/collect.py    scope (horizon, indoor, TBA) -> one call per location -> hourly.json
 │   ├── weather/validate.py   25 checks: game/team/venue join, coverage, hour window, value ranges
+│   ├── replay/build.py       play-by-play -> replay data (clock order, ball-spot repair, win-prob carry) -> HTML
+│   ├── replay/template.html  the replay page: field in team colours, score bug, drive chart, transport, drive log
 │   ├── storage.py            SQLite loader (INSERT OR REPLACE keyed on natural key + snapshot_utc)
 │   ├── schema.sql            tables for every JSON row type + `v_game_lines` convenience view
 │   └── cli.py                argparse wiring only
@@ -82,7 +84,19 @@ uv run ncaaf-clv load-db --db data/ncaaf_clv.db --espn-snapshot <snapshot> --odd
 # 5. Through the week: re-collect the games not yet final (scores, status, box score, plays, closing
 #    lines) into a refresh-<tag> snapshot and load it; rows append, `v_espn_games_latest` is current state
 uv run ncaaf-clv refresh --db data/ncaaf_clv.db          # --dry-run lists the open games, no ESPN calls
+# 6. Watch any collected game: self-contained HTML replay (animated field in team colours, scoreboard,
+#    drive chart, ESPN win probability, drive log) -> data/processed/replays/<espn-snapshot>/<game_id>.html
+uv run ncaaf-clv replay --espn-snapshot refresh-<tag> --game-id 401856635 --open   # or --all
 ```
+
+`replay` reads `games/<id>/play_by_play.json` + `gamecast.json` from the snapshot (default: the most
+recently written one that has game folders) and writes one page per game with the play data, the team
+logos (fetched once from ESPN's CDN into `data/raw/espn/logos/`, `--no-logos` for offline badges) and
+the CSS/JS inlined, so the file opens from disk or can be shared as-is. Plays are re-ordered by period
+and clock (ESPN lists a timeout after the play it preceded), the ball spot after each play comes from
+the next snap (ESPN's `end_yard_line` is 0 on some penalties and turnovers), timeouts and quarter ends
+hold the previous state, and the pre-snap clock is parsed from the `(MM:SS)` prefix of the play text so
+the scoreboard clock runs during the play.
 
 `refresh` takes the open set from the database (each game's latest `espn_games` row with
 `status_state != 'post'`, so cancelled/postponed games are not retried), fetches the scoreboard for the

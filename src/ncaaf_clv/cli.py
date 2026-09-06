@@ -12,6 +12,7 @@ ncaaf-clv weather forecast  [--espn-snapshot TAG] [--snapshot TAG] [--game-id ID
 ncaaf-clv weather observed  [--espn-snapshot TAG] [--snapshot TAG] [--game-id ID ...] [--date YYYYMMDD ...] [--db PATH]
 ncaaf-clv weather validate  --weather PATH [--espn-snapshot TAG] [--db PATH]
 ncaaf-clv load-db   ... [--weather PATH] [--weather-report PATH] [--locations PATH]
+ncaaf-clv replay    [--espn-snapshot TAG] (--game-id ID ... | --all) [--out DIR] [--no-logos] [--open]
 """
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ import asyncio
 import json
 import logging
 import sys
+import webbrowser
 from pathlib import Path
 
 from ncaaf_clv import storage
@@ -30,6 +32,7 @@ from ncaaf_clv.espn.client import BlockedError
 from ncaaf_clv.espn.collect import run_backfill_pipeline, run_espn_pipeline
 from ncaaf_clv.espn.refresh import open_games, run_refresh_pipeline
 from ncaaf_clv.overtime.parse import parse_overtime_dump
+from ncaaf_clv.replay.build import default_snapshot, espn_snapshot_dir, list_game_ids, run_replay
 from ncaaf_clv.resolve.game_join import join_overtime_to_espn
 from ncaaf_clv.resolve.team_resolver import TeamResolver
 from ncaaf_clv.validate.validator import validate_snapshot
@@ -182,6 +185,30 @@ def cmd_refresh(args: argparse.Namespace, settings: Settings) -> int:
         conn.close()
     print(json.dumps(manifest, indent=2))
     return 1 if manifest.get("collect_failed") else 0
+
+
+def cmd_replay(args: argparse.Namespace, settings: Settings) -> int:
+    """Self-contained HTML replay (scoreboard, field, drive chart, win %) for collected games."""
+    espn_snapshot = args.espn_snapshot or default_snapshot(settings)
+    if not espn_snapshot:
+        log.error("no ESPN snapshot with game folders under %s", settings.processed_dir / "espn")
+        return 1
+    game_ids = list_game_ids(espn_snapshot_dir(settings, espn_snapshot)) if args.all else list(args.game_id or [])
+    if not game_ids:
+        log.error("nothing to render: pass --game-id (repeatable) or --all (snapshot %s)", espn_snapshot)
+        return 1
+    manifest = run_replay(
+        settings,
+        espn_snapshot,
+        game_ids,
+        out_dir=Path(args.out) if args.out else None,
+        logos=not args.no_logos,
+    )
+    print(json.dumps(manifest, indent=2))
+    if args.open:
+        for w in manifest["written"]:
+            webbrowser.open(Path(w["path"]).resolve().as_uri())
+    return 0 if manifest["written"] else 1
 
 
 # ------------------------------------------------------------------------ weather
@@ -390,6 +417,19 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--no-load", action="store_true", help="write the snapshot dir but do not load it")
     s.add_argument("--dry-run", action="store_true", help="list the open games and exit (no ESPN calls)")
     s.set_defaults(func=cmd_refresh)
+
+    s = sub.add_parser(
+        "replay",
+        help="self-contained HTML replay of collected games: animated field in team colours, scoreboard, "
+        "drive chart, win probability -> data/processed/replays/<espn-snapshot>/<game_id>.html",
+    )
+    s.add_argument("--espn-snapshot", help="snapshot holding games/<id>/ (default: most recently written)")
+    s.add_argument("--game-id", action="append", help="ESPN game id (repeatable)")
+    s.add_argument("--all", action="store_true", help="every game in the snapshot that has plays")
+    s.add_argument("--out", help="output directory (default: data/processed/replays/<espn-snapshot>)")
+    s.add_argument("--no-logos", action="store_true", help="skip logo download; use coloured abbreviation badges")
+    s.add_argument("--open", action="store_true", help="open each written page in the default browser")
+    s.set_defaults(func=cmd_replay)
 
     w = sub.add_parser("weather", help="AccuWeather hourly weather around kickoff for outdoor FBS games")
     wsub = w.add_subparsers(dest="weather_command", required=True)
