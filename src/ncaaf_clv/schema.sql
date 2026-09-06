@@ -195,7 +195,16 @@ CREATE TABLE IF NOT EXISTS validation_checks (
 );
 
 -- Convenience view: Overtime full-game line joined to the ESPN game + DraftKings reference.
-CREATE VIEW IF NOT EXISTS v_game_lines AS
+-- Current state of every game: its row at the latest snapshot (weekly collect, refresh or backfill).
+-- Views are dropped and recreated so definition changes reach existing databases on connect.
+DROP VIEW IF EXISTS v_espn_games_latest;
+CREATE VIEW v_espn_games_latest AS
+SELECT g.*
+FROM espn_games g
+WHERE g.snapshot_utc = (SELECT MAX(g2.snapshot_utc) FROM espn_games g2 WHERE g2.game_id = g.game_id);
+
+DROP VIEW IF EXISTS v_game_lines;
+CREATE VIEW v_game_lines AS
 SELECT
     o.snapshot_utc, o.ot_game_num, m.espn_game_id, g.name AS espn_game_name, g.kickoff_utc,
     g.status_name, o.period_key, o.away_team_raw, o.home_team_raw, m.away_team_id, m.home_team_id,
@@ -205,5 +214,80 @@ SELECT
     g.home_score, g.away_score
 FROM overtime_odds o
 JOIN game_map m ON m.ot_game_num = o.ot_game_num AND m.snapshot_utc = o.snapshot_utc
-LEFT JOIN espn_games g ON g.game_id = m.espn_game_id
+LEFT JOIN v_espn_games_latest g ON g.game_id = m.espn_game_id
 LEFT JOIN espn_odds e ON e.game_id = m.espn_game_id AND e.snapshot_utc = g.snapshot_utc;
+
+-- ------------------------------------------------------------------ weather (AccuWeather)
+-- Stadium registry: ESPN venue -> AccuWeather location key. One row per venue (no snapshot: reference data).
+CREATE TABLE IF NOT EXISTS weather_locations (
+    venue_id TEXT NOT NULL PRIMARY KEY,
+    venue_name TEXT, venue_city TEXT, venue_state TEXT, venue_country TEXT, venue_zip TEXT,
+    venue_indoor INTEGER, roof_type TEXT, is_indoor INTEGER,
+    game_count INTEGER, first_season INTEGER, last_season INTEGER,
+    location_key TEXT, alias_key TEXT, is_alias INTEGER, location_name TEXT, location_type TEXT,
+    admin_area TEXT, country_code TEXT, primary_postal_code TEXT, parent_city TEXT,
+    lat REAL, lon REAL, elevation_ft REAL, tz_name TEXT, tz_offset_h REAL, location_stem TEXT, web_hourly_url TEXT,
+    method TEXT, query TEXT, candidates INTEGER, resolved_utc TEXT,
+    notes TEXT  -- JSON array
+);
+
+-- Hourly forecast / observation rows around kickoff, keyed to the ESPN game and its teams.
+-- source: accuweather_forecast (pre-game snapshots, one per run) | accuweather_observed (historical/24 after the game)
+CREATE TABLE IF NOT EXISTS weather_hourly (
+    game_id TEXT NOT NULL, source TEXT NOT NULL, forecast_for_utc TEXT NOT NULL, snapshot_utc TEXT NOT NULL,
+    home_team_id TEXT, away_team_id TEXT, venue_id TEXT, venue_name TEXT, location_key TEXT, kickoff_utc TEXT,
+    hour_offset_from_kickoff REAL, lead_hours REAL, in_game_window INTEGER,
+    forecast_for_local TEXT, epoch INTEGER, is_daylight INTEGER,
+    weather_icon INTEGER, icon_phrase TEXT, has_precipitation INTEGER, precipitation_type TEXT, precipitation_intensity TEXT,
+    temp_f REAL, real_feel_f REAL, real_feel_phrase TEXT, real_feel_shade_f REAL, wet_bulb_f REAL, wet_bulb_globe_f REAL,
+    dew_point_f REAL, relative_humidity INTEGER, indoor_relative_humidity INTEGER,
+    wind_speed_mph REAL, wind_direction_deg INTEGER, wind_direction_text TEXT, wind_gust_mph REAL,
+    precip_probability INTEGER, rain_probability INTEGER, snow_probability INTEGER, ice_probability INTEGER,
+    thunderstorm_probability INTEGER,
+    total_liquid_in REAL, rain_in REAL, snow_in REAL, ice_in REAL,
+    cloud_cover INTEGER, ceiling_ft REAL, visibility_mi REAL, uv_index INTEGER, uv_index_text TEXT,
+    evapotranspiration_in REAL, solar_irradiance_wm2 REAL,
+    pressure_inhg REAL, precip_1hr_in REAL,
+    link TEXT, mobile_link TEXT,
+    PRIMARY KEY (game_id, source, forecast_for_utc, snapshot_utc)
+);
+CREATE INDEX IF NOT EXISTS idx_weather_hourly_game ON weather_hourly (game_id, source, snapshot_utc);
+CREATE INDEX IF NOT EXISTS idx_weather_hourly_kickoff ON weather_hourly (kickoff_utc);
+
+-- One row per (game, source, snapshot): window coverage + feature-ready aggregates. Written for every
+-- in-scope game; `status` explains missing hours (indoor_skipped, unresolved_location, outside_horizon, ...).
+CREATE TABLE IF NOT EXISTS weather_game_window (
+    game_id TEXT NOT NULL, source TEXT, snapshot_utc TEXT NOT NULL,
+    home_team_id TEXT, away_team_id TEXT, venue_id TEXT, venue_name TEXT, location_key TEXT,
+    is_indoor INTEGER, roof_type TEXT, status TEXT NOT NULL, note TEXT,
+    kickoff_utc TEXT, window_start_utc TEXT, window_end_utc TEXT, lead_hours_at_kickoff REAL,
+    hours_expected INTEGER, hours_reachable INTEGER, hours_present INTEGER, coverage_pct REAL,
+    first_hour_utc TEXT, last_hour_utc TEXT,
+    temp_f_mean REAL, temp_f_min REAL, temp_f_max REAL, temp_f_at_kickoff REAL, real_feel_f_mean REAL,
+    dew_point_f_mean REAL, relative_humidity_mean REAL,
+    wind_speed_mph_mean REAL, wind_speed_mph_max REAL, wind_gust_mph_max REAL, wind_direction_deg_at_kickoff INTEGER,
+    precip_probability_max INTEGER, precip_probability_mean REAL, thunderstorm_probability_max INTEGER,
+    total_liquid_in_sum REAL, rain_in_sum REAL, snow_in_sum REAL, hours_with_precipitation INTEGER,
+    cloud_cover_mean REAL, visibility_mi_min REAL, pressure_inhg_mean REAL,
+    icon_phrases TEXT,  -- JSON array
+    PRIMARY KEY (game_id, source, snapshot_utc)
+);
+CREATE INDEX IF NOT EXISTS idx_weather_window_kickoff ON weather_game_window (kickoff_utc);
+
+-- Convenience view: latest pre-game forecast window per game joined to the ESPN game (teams, score, venue).
+CREATE VIEW IF NOT EXISTS v_game_weather AS
+SELECT
+    w.game_id, g.name AS espn_game_name, g.kickoff_utc, g.season_year, g.week, g.status_name,
+    w.home_team_id, w.away_team_id, g.venue_name, w.is_indoor, w.roof_type, w.source, w.snapshot_utc, w.status,
+    w.lead_hours_at_kickoff, w.hours_expected, w.hours_reachable, w.hours_present, w.coverage_pct,
+    w.temp_f_mean, w.temp_f_at_kickoff, w.real_feel_f_mean, w.dew_point_f_mean, w.relative_humidity_mean,
+    w.wind_speed_mph_mean, w.wind_speed_mph_max, w.wind_gust_mph_max, w.wind_direction_deg_at_kickoff,
+    w.precip_probability_max, w.thunderstorm_probability_max, w.total_liquid_in_sum, w.hours_with_precipitation,
+    w.cloud_cover_mean, w.visibility_mi_min, g.home_score, g.away_score
+FROM weather_game_window w
+JOIN espn_games g ON g.game_id = w.game_id
+   AND g.snapshot_utc = (SELECT MAX(g2.snapshot_utc) FROM espn_games g2 WHERE g2.game_id = w.game_id)
+WHERE w.snapshot_utc = (
+    SELECT MAX(w2.snapshot_utc) FROM weather_game_window w2
+    WHERE w2.game_id = w.game_id AND w2.source = w.source
+);

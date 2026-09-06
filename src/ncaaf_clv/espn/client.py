@@ -111,8 +111,11 @@ class ESPNClient:
                 continue
 
             if resp.status_code in BLOCK_STATUS:
-                log.error("Blocking signal HTTP %d from %s", resp.status_code, url)
-                raise BlockedError(f"HTTP {resp.status_code} from {url}")
+                # ESPN's edge 403s browser-style and bare custom agents; name the one in use so a bad
+                # NCAAF_CLV_ESPN_USER_AGENT (e.g. an inline .env comment read as the value) is obvious.
+                ua = self._client.headers.get("user-agent")
+                log.error("Blocking signal HTTP %d from %s (user-agent %r)", resp.status_code, url, ua)
+                raise BlockedError(f"HTTP {resp.status_code} from {url} (user-agent {ua!r})")
 
             resp.raise_for_status()
             raise RuntimeError(f"Unexpected HTTP {resp.status_code} from {url}")
@@ -191,6 +194,11 @@ class ESPNClient:
         """Core API group object (conference or division) from its `$ref`; carries `parent.$ref`."""
         gid = group_id_from_ref(ref)
         return await self.get_json(ref.replace("http://", "https://"), cache_key=f"groups/{gid}")
+
+    async def venue(self, venue_id: str) -> dict[str, Any]:
+        """Core API venue: fullName, address {city, state, zipCode, country}, indoor, grass.
+        The site API's venue stub omits zipCode; the zip is the postal-code fallback for weather locations."""
+        return await self.get_json(f"{ESPN_CORE_API}/venues/{venue_id}", {"lang": "en"}, cache_key=f"venues/{venue_id}")
 
     async def team_detail(self, team_id: str) -> dict[str, Any]:
         return await self.get_json(f"{ESPN_SITE_API}/teams/{team_id}", cache_key=f"teams/{team_id}/team")

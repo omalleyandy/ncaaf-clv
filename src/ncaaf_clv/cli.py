@@ -5,8 +5,14 @@ ncaaf-clv overtime  RAW_DUMP.json [--snapshot TAG]
 ncaaf-clv join      --espn-snapshot TAG --odds ODDS.json
 ncaaf-clv validate  --espn-snapshot TAG --odds ODDS.json --join JOIN.json
 ncaaf-clv run       RAW_DUMP.json [--snapshot TAG]        # espn + overtime + join + validate
-ncaaf-clv load-db   --db PATH --espn-snapshot TAG [--odds ODDS.json] [--join JOIN.json] [--report REPORT.json]
+ncaaf-clv load-db   --db PATH [--espn-snapshot TAG] [--odds ODDS.json] [--join JOIN.json] [--report REPORT.json]
 ncaaf-clv backfill  --years 2021-2025 [--weeks 1-15] [--season-type 2] [--db PATH] [--keep-raw] [--force]
+ncaaf-clv weather locations [--espn-snapshot TAG|--db PATH] [--refresh] [--include-indoor] [--limit N] [--venue-id ID]
+ncaaf-clv weather forecast  [--espn-snapshot TAG] [--snapshot TAG] [--game-id ID ...] [--date YYYYMMDD ...] [--db PATH]
+ncaaf-clv weather observed  [--espn-snapshot TAG] [--snapshot TAG] [--game-id ID ...] [--date YYYYMMDD ...] [--db PATH]
+ncaaf-clv weather validate  --weather PATH [--espn-snapshot TAG] [--db PATH]
+ncaaf-clv load-db   ... [--weather PATH] [--weather-report PATH] [--locations PATH]
+ncaaf-clv replay    [--espn-snapshot TAG] (--game-id ID ... | --all) [--out DIR] [--no-logos] [--open]
 """
 
 from __future__ import annotations
@@ -16,16 +22,29 @@ import asyncio
 import json
 import logging
 import sys
+import webbrowser
 from pathlib import Path
 
 from ncaaf_clv import storage
 from ncaaf_clv.common import read_json, snapshot_tag, write_json
 from ncaaf_clv.config import REGULAR_SEASON_TYPE, Settings, configure_logging, load_settings
+from ncaaf_clv.espn.client import BlockedError
 from ncaaf_clv.espn.collect import run_backfill_pipeline, run_espn_pipeline
+from ncaaf_clv.espn.refresh import open_games, run_refresh_pipeline
 from ncaaf_clv.overtime.parse import parse_overtime_dump
+from ncaaf_clv.replay.build import default_snapshot, espn_snapshot_dir, list_game_ids, run_replay
 from ncaaf_clv.resolve.game_join import join_overtime_to_espn
 from ncaaf_clv.resolve.team_resolver import TeamResolver
 from ncaaf_clv.validate.validator import validate_snapshot
+from ncaaf_clv.weather.collect import (
+    MODE_FORECAST,
+    MODE_OBSERVED,
+    load_espn_games,
+    run_weather_locations,
+    run_weather_pipeline,
+)
+from ncaaf_clv.weather.stadiums import load_registry
+from ncaaf_clv.weather.validate import validate_weather
 
 log = logging.getLogger(__name__)
 
@@ -121,16 +140,170 @@ def cmd_run(args: argparse.Namespace, settings: Settings) -> int:
 
 def cmd_load_db(args: argparse.Namespace, settings: Settings) -> int:
     conn = storage.connect(Path(args.db))
-    counts = storage.load_espn_snapshot(conn, settings.processed_dir / "espn" / args.espn_snapshot)
+    counts: dict[str, int] = {}
+    if args.espn_snapshot:
+        counts = storage.load_espn_snapshot(conn, settings.processed_dir / "espn" / args.espn_snapshot)
     if args.odds:
         counts["overtime_odds"] = storage.load_overtime_snapshot(conn, Path(args.odds))
     if args.join:
         counts.update(storage.load_join(conn, Path(args.join)))
     if args.report:
         counts["validation_checks"] = storage.load_validation(conn, Path(args.report))
+    if args.locations:
+        counts["weather_locations"] = storage.load_weather_locations(conn, Path(args.locations))
+    if args.weather:
+        counts.update(storage.load_weather_snapshot(conn, Path(args.weather)))
+    if args.weather_report:
+        counts["validation_checks"] = counts.get("validation_checks", 0) + storage.load_validation(
+            conn, Path(args.weather_report)
+        )
     conn.close()
     print(json.dumps(counts, indent=2))
     return 0
+
+
+def cmd_refresh(args: argparse.Namespace, settings: Settings) -> int:
+    """Re-collect the games whose latest `espn_games` row is not final; append as a refresh-<tag> snapshot."""
+    conn = storage.connect(Path(args.db))
+    try:
+        season_year = args.season_year or settings.season_year
+        if args.dry_run:
+            games = open_games(conn, season_year)
+            print(json.dumps({"season_year": season_year, "open": len(games), "games": games}, indent=2))
+            return 0
+        try:
+            manifest = asyncio.run(run_refresh_pipeline(settings, conn, season_year, args.snapshot))
+        except BlockedError as exc:  # nothing loaded: safe to re-run once ESPN lets us through
+            log.error("refresh stopped: %s (database unchanged, partial snapshot dir not loaded; re-run later)", exc)
+            return 2
+        if manifest.get("out_dir") and not args.no_load:
+            out_dir = Path(manifest["out_dir"])
+            manifest["db_counts"] = storage.load_espn_snapshot(conn, out_dir)
+            write_json(out_dir / "manifest.json", manifest)
+            log.info("loaded %s into %s: %s", out_dir, args.db, manifest["db_counts"])
+    finally:
+        conn.close()
+    print(json.dumps(manifest, indent=2))
+    return 1 if manifest.get("collect_failed") else 0
+
+
+def cmd_replay(args: argparse.Namespace, settings: Settings) -> int:
+    """Self-contained HTML replay (scoreboard, field, drive chart, win %) for collected games."""
+    espn_snapshot = args.espn_snapshot or default_snapshot(settings)
+    if not espn_snapshot:
+        log.error("no ESPN snapshot with game folders under %s", settings.processed_dir / "espn")
+        return 1
+    game_ids = list_game_ids(espn_snapshot_dir(settings, espn_snapshot)) if args.all else list(args.game_id or [])
+    if not game_ids:
+        log.error("nothing to render: pass --game-id (repeatable) or --all (snapshot %s)", espn_snapshot)
+        return 1
+    manifest = run_replay(
+        settings,
+        espn_snapshot,
+        game_ids,
+        out_dir=Path(args.out) if args.out else None,
+        logos=not args.no_logos,
+    )
+    print(json.dumps(manifest, indent=2))
+    if args.open:
+        for w in manifest["written"]:
+            webbrowser.open(Path(w["path"]).resolve().as_uri())
+    return 0 if manifest["written"] else 1
+
+
+# ------------------------------------------------------------------------ weather
+
+
+def step_validate_weather(settings: Settings, weather_path: Path, espn_snapshot: str | None) -> Path:
+    weather = read_json(weather_path)
+    espn_snapshot = espn_snapshot or weather["meta"]["espn_snapshot"]
+    games = load_espn_games(settings, espn_snapshot)
+    registry = load_registry(settings.weather_locations_file)
+    report = validate_weather(weather, games, registry)
+    report["meta"].update({"snapshot": weather["meta"]["snapshot"], "espn_snapshot": espn_snapshot})
+    out = weather_path.with_name("report.json")
+    write_json(out, report)
+    log.info(
+        "weather validation: %s (%d errors, %d warnings)",
+        report["meta"]["status"],
+        report["meta"]["errors"],
+        report["meta"]["warnings"],
+    )
+    return out
+
+
+def _print_report(report: dict) -> int:
+    print(json.dumps(report["meta"], indent=2))
+    for c in report["checks"]:
+        if not c["passed"]:
+            print(
+                f"[{c['level'].upper():5s}] {c['name']}: {c['failure_count']} of {c['observed']} - {c['description']}"
+            )
+    return 1 if report["meta"]["status"] == "FAIL" else 0
+
+
+def cmd_weather_locations(args: argparse.Namespace, settings: Settings) -> int:
+    stats = asyncio.run(
+        run_weather_locations(
+            settings,
+            espn_snapshots=args.espn_snapshot,
+            db_path=Path(args.db) if args.db else None,
+            refresh=args.refresh,
+            include_indoor=args.include_indoor,
+            limit=args.limit,
+            resolve=not args.no_resolve,
+            venue_ids=args.venue_id,
+        )
+    )
+    print(json.dumps(stats, indent=2, default=str))
+    return 0
+
+
+def _cmd_weather_collect(args: argparse.Namespace, settings: Settings, mode: str) -> int:
+    manifest = asyncio.run(
+        run_weather_pipeline(
+            settings,
+            mode=mode,
+            espn_snapshot=args.espn_snapshot,
+            snapshot=args.snapshot,
+            game_ids=args.game_id,
+            dates=args.date,
+            keep_all_hours=getattr(args, "keep_all_hours", False),
+        )
+    )
+    weather_path = Path(manifest["out"])
+    report_path = step_validate_weather(settings, weather_path, manifest["espn_snapshot"])
+    report = read_json(report_path)
+    if manifest.get("stopped") and not manifest.get("hourly_rows"):
+        log.error("run stopped before any weather was fetched; nothing loaded into the DB (%s)", manifest["stopped"])
+    elif args.db:
+        conn = storage.connect(Path(args.db))
+        counts = storage.load_weather_snapshot(conn, weather_path)
+        counts["weather_locations"] = storage.load_weather_locations(conn, settings.weather_locations_file)
+        counts["validation_checks"] = storage.load_validation(conn, report_path)
+        conn.close()
+        manifest["db_counts"] = counts
+    print(json.dumps(manifest, indent=2))
+    rc = _print_report(report)
+    return 2 if manifest.get("stopped") else rc
+
+
+def cmd_weather_forecast(args: argparse.Namespace, settings: Settings) -> int:
+    return _cmd_weather_collect(args, settings, MODE_FORECAST)
+
+
+def cmd_weather_observed(args: argparse.Namespace, settings: Settings) -> int:
+    return _cmd_weather_collect(args, settings, MODE_OBSERVED)
+
+
+def cmd_weather_validate(args: argparse.Namespace, settings: Settings) -> int:
+    report_path = step_validate_weather(settings, Path(args.weather), args.espn_snapshot)
+    report = read_json(report_path)
+    if args.db:
+        conn = storage.connect(Path(args.db))
+        storage.load_validation(conn, report_path)
+        conn.close()
+    return _print_report(report)
 
 
 def parse_int_ranges(spec: str) -> list[int]:
@@ -215,10 +388,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("load-db", help="load processed JSON into SQLite")
     s.add_argument("--db", required=True)
-    s.add_argument("--espn-snapshot", required=True)
+    s.add_argument("--espn-snapshot", help="ESPN snapshot to load (optional when loading weather/locations only)")
     s.add_argument("--odds")
     s.add_argument("--join")
     s.add_argument("--report")
+    s.add_argument("--weather", help="data/processed/weather/<snapshot>/hourly.json")
+    s.add_argument("--weather-report", help="data/processed/weather/<snapshot>/report.json")
+    s.add_argument("--locations", help="stadium registry JSON (see NCAAF_CLV_WEATHER_LOCATIONS_FILE)")
     s.set_defaults(func=cmd_load_db)
 
     s = sub.add_parser("backfill", help="collect past seasons by (year, week) incl. core-API sportsbook lines")
@@ -229,6 +405,66 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--keep-raw", action="store_true", help="persist raw ESPN payloads under data/raw/espn/")
     s.add_argument("--force", action="store_true", help="re-fetch games already present in the snapshot dir")
     s.set_defaults(func=cmd_backfill)
+
+    s = sub.add_parser(
+        "refresh",
+        help="re-collect games not yet final in SQLite (scores, status, box score, plays, closing lines); "
+        "appends a refresh-<tag> snapshot and loads it",
+    )
+    s.add_argument("--db", required=True, help="SQLite file that supplies the open set and receives the rows")
+    s.add_argument("--season-year", type=int, help="default: the SEASON_YEAR setting")
+    s.add_argument("--snapshot", help="snapshot tag (default: refresh-<now>)")
+    s.add_argument("--no-load", action="store_true", help="write the snapshot dir but do not load it")
+    s.add_argument("--dry-run", action="store_true", help="list the open games and exit (no ESPN calls)")
+    s.set_defaults(func=cmd_refresh)
+
+    s = sub.add_parser(
+        "replay",
+        help="self-contained HTML replay of collected games: animated field in team colours, scoreboard, "
+        "drive chart, win probability -> data/processed/replays/<espn-snapshot>/<game_id>.html",
+    )
+    s.add_argument("--espn-snapshot", help="snapshot holding games/<id>/ (default: most recently written)")
+    s.add_argument("--game-id", action="append", help="ESPN game id (repeatable)")
+    s.add_argument("--all", action="store_true", help="every game in the snapshot that has plays")
+    s.add_argument("--out", help="output directory (default: data/processed/replays/<espn-snapshot>)")
+    s.add_argument("--no-logos", action="store_true", help="skip logo download; use coloured abbreviation badges")
+    s.add_argument("--open", action="store_true", help="open each written page in the default browser")
+    s.set_defaults(func=cmd_replay)
+
+    w = sub.add_parser("weather", help="AccuWeather hourly weather around kickoff for outdoor FBS games")
+    wsub = w.add_subparsers(dest="weather_command", required=True)
+
+    s = wsub.add_parser("locations", help="build the stadium registry and resolve AccuWeather location keys")
+    s.add_argument("--espn-snapshot", action="append", help="ESPN snapshot(s) to take venues from (default: all)")
+    s.add_argument("--db", help="take the venue universe from espn_games in this SQLite file instead")
+    s.add_argument("--refresh", action="store_true", help="re-resolve venues that already have a key (manual kept)")
+    s.add_argument("--include-indoor", action="store_true", help="also resolve domes (no forecasts collected)")
+    s.add_argument("--limit", type=int, help="max venues to resolve this run (trial keys: 50 calls/day)")
+    s.add_argument("--no-resolve", action="store_true", help="only (re)build the registry from ESPN; no API calls")
+    s.add_argument("--venue-id", action="append", help="re-resolve exactly these ESPN venue ids (repeatable)")
+    s.set_defaults(func=cmd_weather_locations)
+
+    for name, func, help_text in (
+        ("forecast", cmd_weather_forecast, "pre-game hourly forecast snapshot for games inside the API horizon"),
+        ("observed", cmd_weather_observed, "post-game observed conditions (past 24 h) for games just played"),
+    ):
+        s = wsub.add_parser(name, help=help_text)
+        s.add_argument("--espn-snapshot", help="ESPN snapshot whose scoreboard supplies the games (default: latest)")
+        s.add_argument("--snapshot", help="weather snapshot tag (default: now)")
+        s.add_argument("--game-id", action="append", help="restrict to these ESPN game ids (repeatable)")
+        s.add_argument("--date", action="append", help="restrict to kickoffs on this ET date YYYYMMDD (repeatable)")
+        if name == "forecast":
+            s.add_argument(
+                "--keep-all-hours", action="store_true", help="store every returned hour, not just the window"
+            )
+        s.add_argument("--db", help="load hourly rows, window rows, registry and the report into this SQLite file")
+        s.set_defaults(func=func)
+
+    s = wsub.add_parser("validate", help="re-run the weather data-quality checks on a hourly.json")
+    s.add_argument("--weather", required=True)
+    s.add_argument("--espn-snapshot", help="default: the one recorded in the payload meta")
+    s.add_argument("--db", help="load the report into this SQLite file")
+    s.set_defaults(func=cmd_weather_validate)
     return p
 
 

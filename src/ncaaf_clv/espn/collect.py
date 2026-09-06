@@ -15,6 +15,8 @@ Two entry points:
     run_backfill_pipeline  past seasons by (year, week); one snapshot per season, resumable, with the
                            core API's per-game sportsbook lines (the summary's pickcenter is empty for
                            seasons before 2023 and carries no open/close before ESPN BET).
+    espn.refresh           re-collect the games still open in SQLite into a `refresh-<tag>` snapshot
+                           (scoreboard rows for the open set, summaries for those that kicked off).
 """
 
 from __future__ import annotations
@@ -152,6 +154,40 @@ class ESPNCollector:
         }
         write_json(self.out_dir / "scoreboard.json", out)
         log.info("scoreboard %d weeks %s: %d games", season_year, weeks, len(merged["games"]))
+        return out
+
+    async def collect_scoreboard_for_games(
+        self,
+        client: ESPNClient,
+        season_year: int,
+        season_weeks: Iterable[tuple[int, int]],
+        game_ids: Iterable[str],
+    ) -> dict[str, Any]:
+        """Fetch the `(season_type, week)` scoreboards and keep only `game_ids` (refresh of open games)."""
+        keep = set(game_ids)
+        season_weeks = sorted(season_weeks)
+        payloads = [await client.scoreboard_week(season_year, week, season_type) for season_type, week in season_weeks]
+        merged = self._merge_scoreboards(payloads)
+        subset = {key: [r for r in rows if r["game_id"] in keep] for key, rows in merged.items()}
+        out = {
+            "meta": _meta(
+                self.snapshot_utc,
+                self.snapshot,
+                season_year=season_year,
+                weeks=[list(w) for w in season_weeks],
+                requested=len(keep),
+                game_count=len(subset["games"]),
+            ),
+            **subset,
+        }
+        write_json(self.out_dir / "scoreboard.json", out)
+        log.info(
+            "scoreboard %d weeks %s: %d of %d open games listed",
+            season_year,
+            season_weeks,
+            len(subset["games"]),
+            len(keep),
+        )
         return out
 
     # ----------------------------------------------------------------- games
