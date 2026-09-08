@@ -84,6 +84,8 @@ uv run ncaaf-clv load-db --db data/ncaaf_clv.db --espn-snapshot <snapshot> --odd
 # 5. Through the week: re-collect the games not yet final (scores, status, box score, plays, closing
 #    lines) into a refresh-<tag> snapshot and load it; rows append, `v_espn_games_latest` is current state
 uv run ncaaf-clv refresh --db data/ncaaf_clv.db          # --dry-run lists the open games, no ESPN calls
+#    scheduled: Task Scheduler job "ncaaf-clv refresh" runs scripts/refresh_task.ps1 Mon + Tue 07:00 local,
+#    logging to data/logs/refresh-<yyyyMM>.log (register/inspect with Get-ScheduledTask in PowerShell)
 # 6. Watch any collected game: self-contained HTML replay (animated field in team colours, scoreboard,
 #    drive chart, ESPN win probability, drive log) -> data/processed/replays/<espn-snapshot>/<game_id>.html
 uv run ncaaf-clv replay --espn-snapshot refresh-<tag> --game-id 401856635 --open   # or --all
