@@ -89,6 +89,10 @@ uv run ncaaf-clv refresh --db data/ncaaf_clv.db          # --dry-run lists the o
 uv run ncaaf-clv replay --espn-snapshot refresh-<tag> --game-id 401856635 --open   # or --all
 ```
 
+Every command is also available as `uv run python -m ncaaf_clv <command> ...` — the same entry point without
+the console-script shim. Use that form where Windows Smart App Control blocks uv's unsigned
+`.venv\Scripts\ncaaf-clv.exe` launcher ("An Application Control policy has blocked this file", os error 4551).
+
 `replay` reads `games/<id>/play_by_play.json` + `gamecast.json` from the snapshot (default: the most
 recently written one that has game folders) and writes one page per game with the play data, the team
 logos (fetched once from ESPN's CDN into `data/raw/espn/logos/`, `--no-logos` for offline badges) and
