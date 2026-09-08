@@ -255,8 +255,8 @@ def test_render_inlines_data_and_escapes_script_terminators(game_dir: Path) -> N
     html = render_replay(build_replay_data(game_dir))
     assert "<title>North Alabama at Arkansas Replay</title>" in html
     assert DATA_TOKEN not in html
-    assert "<\\/b>" in html and "</b>" not in html.split("const D = ", 1)[1].split(";\n", 1)[0]
-    payload = html.split("const D = ", 1)[1].split(";\n", 1)[0]
+    assert "<\\/b>" in html and "</b>" not in html.split("let D = ", 1)[1].split(";\n", 1)[0]
+    payload = html.split("let D = ", 1)[1].split(";\n", 1)[0]
     assert json.loads(payload)["plays"][2]["id"] == "p2"  # the escape is transparent to a JSON parser
 
 

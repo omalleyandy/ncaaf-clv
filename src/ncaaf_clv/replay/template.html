@@ -10,23 +10,24 @@
     --bug:#111614; --bug-text:#f4f6f3; --bug-muted:#9aa89f; --bug-line:#2a332d;
     --focus:#2b62e6; --shadow:0 10px 30px rgba(20,40,25,.10);
     --grass-a:#2f7d3b; --grass-b:#2a7236; --fieldline:rgba(255,255,255,.88);
-    --los:#2b62e6; --fd:#f2d21e;
+    --los:#2b62e6; --fd:#f2d21e; --live:#e0322b;
   }
   @media (prefers-color-scheme: dark){
     :root:not([data-theme="light"]){
       --bg:#0e1210; --surface:#161c18; --surface-2:#1e2621; --text:#e8ece8; --muted:#98a49c; --line:#2a332d;
       --accent:#f2c230; --accent-strong:#ffd34d; --accent-soft:rgba(242,194,48,.16);
       --bug:#0b0f0d; --bug-text:#f4f6f3; --bug-muted:#8e9a92; --bug-line:#232b26;
-      --shadow:0 10px 30px rgba(0,0,0,.45);
+      --shadow:0 10px 30px rgba(0,0,0,.45); --live:#ff5a4f;
     }
   }
   :root[data-theme="dark"]{
     --bg:#0e1210; --surface:#161c18; --surface-2:#1e2621; --text:#e8ece8; --muted:#98a49c; --line:#2a332d;
     --accent:#f2c230; --accent-strong:#ffd34d; --accent-soft:rgba(242,194,48,.16);
     --bug:#0b0f0d; --bug-text:#f4f6f3; --bug-muted:#8e9a92; --bug-line:#232b26;
-    --shadow:0 10px 30px rgba(0,0,0,.45);
+    --shadow:0 10px 30px rgba(0,0,0,.45); --live:#ff5a4f;
   }
   *{box-sizing:border-box}
+  [hidden]{display:none!important}
   body{background:var(--bg);color:var(--text);font-family:'Barlow',system-ui,'Segoe UI',Roboto,sans-serif;font-size:15px;line-height:1.45;margin:0}
   button,select,input{font-family:inherit}
   :focus-visible{outline:2px solid var(--focus);outline-offset:2px}
@@ -34,10 +35,19 @@
 
   /* masthead */
   .masthead{display:flex;justify-content:space-between;align-items:flex-end;gap:16px;flex-wrap:wrap;padding:0 2px 4px}
-  .eyebrow{font-size:12px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}
+  .eyebrow{font-size:12px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);display:flex;align-items:center;gap:12px;flex-wrap:wrap}
   .masthead h1{font-family:'Barlow Condensed','Arial Narrow',Impact,sans-serif;font-weight:800;font-size:38px;line-height:1;margin:6px 0 0;letter-spacing:.01em;text-wrap:balance}
   .meta{font-size:13px;color:var(--muted);text-align:right;line-height:1.5}
   @media (max-width:640px){.meta{text-align:left}}
+
+  /* live badge: only shown on pages written by `replay --live` */
+  .livebadge{display:inline-flex;align-items:center;gap:8px;padding:3px 10px 3px 8px;border-radius:999px;background:var(--surface);border:1px solid var(--line);letter-spacing:.08em;color:var(--text)}
+  .livebadge i{width:8px;height:8px;border-radius:50%;background:var(--muted);flex:none}
+  .livebadge b{font-weight:700}
+  .livebadge span{color:var(--muted);letter-spacing:.02em;text-transform:none;font-weight:500;font-variant-numeric:tabular-nums}
+  .livebadge[data-state="in"] i{background:var(--live);animation:blink 1.4s ease-in-out infinite}
+  .livebadge[data-state="in"] b{color:var(--live)}
+  @keyframes blink{0%,100%{opacity:1}50%{opacity:.25}}
 
   /* score bug: a broadcast element, deliberately dark in both themes */
   .bug{background:var(--bug);color:var(--bug-text);border-radius:12px;overflow:hidden;box-shadow:var(--shadow)}
@@ -102,6 +112,9 @@
   .btn:hover{border-color:var(--muted)}
   .btn.primary{background:var(--text);color:var(--bg);border-color:var(--text);min-width:92px;justify-content:center}
   .btn:disabled{opacity:.45;cursor:default}
+  .btn.live{border-color:var(--live);color:var(--live)}
+  .btn.live.pulse{animation:pulse 1.2s ease-in-out infinite}
+  @keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(224,50,43,.45)}50%{box-shadow:0 0 0 7px rgba(224,50,43,0)}}
   .scrub{flex:1;display:flex;align-items:center;gap:10px;min-width:220px}
   .scrub input[type=range]{flex:1;accent-color:var(--accent);min-width:120px}
   .readout{font-size:13px;color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
@@ -146,13 +159,13 @@
   .sp .desc span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .note{font-size:12.5px;color:var(--muted);line-height:1.5}
   .note b{color:var(--text);font-weight:600}
-  @media (prefers-reduced-motion: reduce){.status.big{animation:none}.wpbar i{transition:none}}
+  @media (prefers-reduced-motion: reduce){.status.big{animation:none}.wpbar i{transition:none}.livebadge i,.btn.live.pulse{animation:none}}
 </style>
 
 <div class="app">
   <header class="masthead">
     <div>
-      <div class="eyebrow">Play-by-play replay · ESPN feed</div>
+      <div class="eyebrow"><span>Play-by-play replay · ESPN feed</span><span class="livebadge" id="liveBadge" hidden><i></i><b id="liveText">Live</b><span id="liveDetail"></span></span></div>
       <h1 id="title"></h1>
     </div>
     <div class="meta" id="meta"></div>
@@ -220,6 +233,7 @@
     <button class="btn" id="btnPrev" title="Previous play (←)">◀ Prev</button>
     <button class="btn primary" id="btnPlay" title="Play / pause (space)">▶ Play</button>
     <button class="btn" id="btnNext" title="Next play (→)">Next ▶</button>
+    <button class="btn live" id="btnLive" title="Jump to the latest play (End)" hidden>● Jump to live</button>
     <div class="scrub">
       <input type="range" id="scrub" min="0" max="1" value="0" step="1" aria-label="Scrub through plays">
       <span class="readout" id="readout"></span>
@@ -248,15 +262,18 @@
 </div>
 
 <script>
-const D = __DATA__;
+let D = __DATA__;
 (() => {
-  const T = D.teams, P = D.plays, DR = D.drives, G = D.game;
-  const HOME = G.home, AWAY = G.away;
+  // P, DR and D are replaced wholesale when a live page receives a newer payload (see "live feed");
+  // T's team objects are updated in place so the chrome built from them stays valid.
+  let T = D.teams, P = D.plays, DR = D.drives;
+  const G = D.game, HOME = G.home, AWAY = G.away;
   const $ = id => document.getElementById(id);
   const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   const reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-  const HOLD = new Set(['Timeout', 'End Period', 'End of Game']);
-  const NOSCRIM = new Set(['Timeout', 'End Period', 'End of Game', 'Kickoff', 'Punt', 'Punt Return', 'Penalty']);
+  const HOLD = new Set(['Timeout', 'End Period', 'End of Half', 'End of Game']);
+  const NOSCRIM = new Set(['Timeout', 'End Period', 'End of Half', 'End of Game', 'Kickoff', 'Punt', 'Punt Return', 'Penalty']);
+  const isHalftime = p => p.type === 'End of Half' || (p.type === 'End Period' && p.per === 2);
   const isTD = p => p.sc && /Touchdown/.test(p.type);
   const isFG = p => /Field Goal/.test(p.type);
   const isKick = p => /Kickoff|Punt|Field Goal/.test(p.type);
@@ -269,6 +286,7 @@ const D = __DATA__;
   const toGoal = (t, v) => t === HOME ? 100 - v : v;
   const fdLine = (t, v, d) => t === HOME ? v + d : v - d;
   const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
+  const isLive = () => !!(D.live && D.live.state !== 'post');
 
   /* ---------- team chrome ---------- */
   const home = T[HOME], away = T[AWAY];
@@ -280,12 +298,15 @@ const D = __DATA__;
   $('awayAbbr').textContent = away.abbr; $('homeAbbr').textContent = home.abbr;
   $('awayFull').textContent = away.name; $('homeFull').textContent = home.name;
   $('title').textContent = D.title;
-  const metaLines = [
-    [G.date, G.week ? 'Week ' + G.week : ''].filter(Boolean).join(' · '),
-    [G.venue, G.city, G.state].filter(Boolean).join(', '),
-    G.attendance ? 'Attendance ' + Number(G.attendance).toLocaleString() : '',
-  ].filter(Boolean);
-  $('meta').innerHTML = metaLines.map(esc).join('<br>');
+  const setMeta = () => {
+    const g = D.game;
+    const metaLines = [
+      [g.date, g.week ? 'Week ' + g.week : ''].filter(Boolean).join(' · '),
+      [g.venue, g.city, g.state].filter(Boolean).join(', '),
+      g.attendance ? 'Attendance ' + Number(g.attendance).toLocaleString() : '',
+    ].filter(Boolean);
+    $('meta').innerHTML = metaLines.map(esc).join('<br>');
+  };
 
   /* ---------- field ---------- */
   const NS = 'http://www.w3.org/2000/svg';
@@ -349,7 +370,10 @@ const D = __DATA__;
 
   /* ---------- helpers on plays ---------- */
   const driveStart = {};   // drive n -> yard line where the first scrimmage play started
-  for (const p of P) if (!(p.drv in driveStart) && p.type !== 'Kickoff' && !HOLD.has(p.type)) driveStart[p.drv] = p.s;
+  const indexPlays = () => {
+    for (const k in driveStart) delete driveStart[k];
+    for (const p of P) if (!(p.drv in driveStart) && p.type !== 'Kickoff' && !HOLD.has(p.type)) driveStart[p.drv] = p.s;
+  };
   const target = p => isTD(p) ? (p.off === HOME ? 105 : -5) : isFG(p) ? (p.off === HOME ? 111 : -11) : p.e;
   const preLabel = p => {
     if (p.type === 'Kickoff') return 'Kickoff';
@@ -362,7 +386,8 @@ const D = __DATA__;
   const resultLabel = p => {
     const t = p.type, x = p.txt;
     if (t === 'Timeout') { const m = /Timeout ([A-Za-z .&'-]+?),/.exec(x); return 'Timeout' + (m ? ' · ' + m[1] : ''); }
-    if (t === 'End Period') return p.per === 2 ? 'Halftime' : `End of ${perName(p.per)} quarter`;
+    if (isHalftime(p)) return 'Halftime';
+    if (t === 'End Period') return `End of ${perName(p.per)} quarter`;
     if (t === 'End of Game') return 'Final';
     if (isTD(p)) return 'Touchdown';
     if (t === 'Field Goal Good') return 'Field goal is good';
@@ -433,7 +458,7 @@ const D = __DATA__;
   const setPeriod = (p, post) => {
     const per = $('period');
     if (post && p.type === 'End of Game') per.textContent = 'Final';
-    else if (post && p.type === 'End Period' && p.per === 2) per.textContent = 'Halftime';
+    else if (post && isHalftime(p)) per.textContent = 'Halftime';
     else per.textContent = `${perName(p.per)} quarter`;
   };
   const setWp = wp => {
@@ -491,12 +516,12 @@ const D = __DATA__;
   /* ---------- transport ---------- */
   let cur = -1, playing = false, speed = 1, raf = 0, timer = 0, token = 0;
   const ease = t => t < .5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
-  const scrub = $('scrub'); scrub.max = P.length - 1;
+  const scrub = $('scrub');
+  const setPos = i => { scrub.value = i; $('readout').textContent = `Play ${i + 1} / ${P.length}`; $('playPos').textContent = `${i + 1} of ${P.length}`; };
   const goTo = (i, instant) => {
     i = clamp(i, 0, P.length - 1); cur = i; const p = P[i];
     token++; const my = token; cancelAnimationFrame(raf); clearTimeout(timer);
-    scrub.value = i; $('readout').textContent = `Play ${i + 1} / ${P.length}`; $('playPos').textContent = `${i + 1} of ${P.length}`;
-    markLog(i); markQ(p.per);
+    setPos(i); markLog(i); markQ(p.per); liveLabel();
     renderPre(i);
     const moves = !HOLD.has(p.type);
     if (instant || reduced || !moves) { renderPost(i); finish(); return; }
@@ -524,7 +549,8 @@ const D = __DATA__;
   const setPlaying = on => {
     playing = on; $('btnPlay').textContent = on ? '❚❚ Pause' : '▶ Play';
     clearTimeout(timer);
-    if (on) { if (cur >= P.length - 1) goTo(0, true); finish(); }
+    // at the end of a finished game, Play restarts; on a live page it waits for the next play instead
+    if (on) { if (cur >= P.length - 1 && !isLive()) goTo(0, true); finish(); }
   };
   $('btnPlay').addEventListener('click', () => setPlaying(!playing));
   $('btnPrev').addEventListener('click', () => { setPlaying(false); goTo(cur - 1, true); });
@@ -541,58 +567,127 @@ const D = __DATA__;
   });
 
   /* quarter chips */
-  const firstOfPeriod = {}; P.forEach((p, i) => { if (!(p.per in firstOfPeriod)) firstOfPeriod[p.per] = i; });
-  const qc = $('qchips');
-  for (const q of Object.keys(firstOfPeriod)) {
-    const b = document.createElement('button'); b.className = 'btn'; b.textContent = +q > 4 ? 'OT' + (+q - 4) : 'Q' + q; b.dataset.q = q;
-    b.addEventListener('click', () => { setPlaying(false); goTo(firstOfPeriod[q], true); });
-    qc.appendChild(b);
-  }
+  const firstOfPeriod = {}; const qc = $('qchips');
+  const buildChips = () => {
+    for (const k in firstOfPeriod) delete firstOfPeriod[k];
+    P.forEach((p, i) => { if (!(p.per in firstOfPeriod)) firstOfPeriod[p.per] = i; });
+    qc.innerHTML = '';
+    for (const q of Object.keys(firstOfPeriod)) {
+      const b = document.createElement('button'); b.className = 'btn'; b.textContent = +q > 4 ? 'OT' + (+q - 4) : 'Q' + q; b.dataset.q = q;
+      b.addEventListener('click', () => { setPlaying(false); goTo(firstOfPeriod[q], true); });
+      qc.appendChild(b);
+    }
+  };
   const markQ = per => { for (const b of qc.children) b.classList.toggle('on', +b.dataset.q === per); };
 
   /* ---------- drive log ---------- */
   const log = $('log'); const rows = [];
-  let lastDrv = null;
-  P.forEach((p, i) => {
-    if (p.drv !== lastDrv) {
-      lastDrv = p.drv; const d = DR.find(x => x.n === p.drv);
-      const h = document.createElement('div'); h.className = 'dhead';
-      if (d) {
-        h.style.setProperty('--tc', '#' + teamOf(d.team).color);
-        h.innerHTML = `<b><i></i>Drive ${d.n} · ${esc(teamOf(d.team).abbr)}</b><span>${esc(d.desc)}</span><span>${esc(d.result)}</span>`;
-      } else h.innerHTML = '<b>—</b><span></span><span></span>';
-      log.appendChild(h);
-    }
-    const r = document.createElement('button'); r.className = 'row' + (p.sc ? ' score' : ''); r.dataset.i = i;
-    const tag = p.sc ? resultLabel(p) : HOLD.has(p.type) || p.type === 'Kickoff' || p.type === 'Penalty' ? resultLabel(p) : (situationPre(i) || p.type);
-    r.innerHTML = `<span class="t">Q${p.per} ${esc(p.clk)}</span><span><span class="dd">${esc(tag)}</span><span class="tx">${esc(p.txt)}</span></span>`;
-    r.addEventListener('click', () => { setPlaying(false); goTo(i, false); });
-    log.appendChild(r); rows.push(r);
-  });
   let curRow = null;
-  const markLog = i => {
+  const buildLog = () => {
+    log.innerHTML = ''; rows.length = 0; curRow = null;
+    let lastDrv = null;
+    P.forEach((p, i) => {
+      if (p.drv !== lastDrv) {
+        lastDrv = p.drv; const d = DR.find(x => x.n === p.drv);
+        const h = document.createElement('div'); h.className = 'dhead';
+        if (d) {
+          h.style.setProperty('--tc', '#' + teamOf(d.team).color);
+          h.innerHTML = `<b><i></i>Drive ${d.n} · ${esc(teamOf(d.team).abbr)}</b><span>${esc(d.desc)}</span><span>${esc(d.result)}</span>`;
+        } else h.innerHTML = '<b>—</b><span></span><span></span>';
+        log.appendChild(h);
+      }
+      const r = document.createElement('button'); r.className = 'row' + (p.sc ? ' score' : ''); r.dataset.i = i;
+      const tag = p.sc ? resultLabel(p) : HOLD.has(p.type) || p.type === 'Kickoff' || p.type === 'Penalty' ? resultLabel(p) : (situationPre(i) || p.type);
+      r.innerHTML = `<span class="t">Q${p.per} ${esc(p.clk)}</span><span><span class="dd">${esc(tag)}</span><span class="tx">${esc(p.txt)}</span></span>`;
+      r.addEventListener('click', () => { setPlaying(false); goTo(i, false); });
+      log.appendChild(r); rows.push(r);
+    });
+  };
+  const markLog = (i, instant) => {
     if (curRow) curRow.classList.remove('cur');
     curRow = rows[i]; curRow.classList.add('cur');
     const top = curRow.offsetTop - log.clientHeight / 2 + curRow.offsetHeight / 2;
-    log.scrollTo({ top, behavior: reduced ? 'auto' : 'smooth' });
+    log.scrollTo({ top, behavior: reduced || instant ? 'auto' : 'smooth' });
   };
 
   /* ---------- summary ---------- */
-  const ls = $('linescore');
-  const qs = Math.max(home.line.length, away.line.length);
-  const thead = '<tr><th></th>' + Array.from({ length: qs }, (_, k) => `<th>${k + 1 > 4 ? 'OT' + (k - 3) : k + 1}</th>`).join('') + '<th>T</th></tr>';
-  const lrow = t => `<tr><td class="tm"><img src="${t.logo}" alt="">${esc(t.abbr)}</td>` + Array.from({ length: qs }, (_, k) => `<td>${t.line[k] ?? ''}</td>`).join('') + `<td class="tot">${t.score}</td></tr>`;
-  ls.innerHTML = thead + lrow(away) + lrow(home);
-  const sp = $('scoring');
-  for (const s of D.scoring) {
-    const t = teamOf(s.team); const b = document.createElement('button');
-    b.innerHTML = `<span class="q">Q${s.per} ${esc(s.clk)}</span><span class="desc"><img src="${t.logo}" alt=""><span>${esc(s.text)}</span></span><span class="sc">${s.as}–${s.hs}</span>`;
-    const idx = P.findIndex(p => p.id === s.id);
-    b.addEventListener('click', () => { setPlaying(false); if (idx >= 0) goTo(idx, false); });
-    sp.appendChild(b);
-  }
-  $('note').innerHTML = D.note;
+  const ls = $('linescore'), sp = $('scoring');
+  const buildSummary = () => {
+    const qs = Math.max(home.line.length, away.line.length);
+    const thead = '<tr><th></th>' + Array.from({ length: qs }, (_, k) => `<th>${k + 1 > 4 ? 'OT' + (k - 3) : k + 1}</th>`).join('') + '<th>T</th></tr>';
+    const lrow = t => `<tr><td class="tm"><img src="${t.logo}" alt="">${esc(t.abbr)}</td>` + Array.from({ length: qs }, (_, k) => `<td>${t.line[k] ?? ''}</td>`).join('') + `<td class="tot">${t.score}</td></tr>`;
+    ls.innerHTML = thead + lrow(away) + lrow(home);
+    sp.innerHTML = '';
+    for (const s of D.scoring) {
+      const t = teamOf(s.team); const b = document.createElement('button');
+      b.innerHTML = `<span class="q">Q${s.per} ${esc(s.clk)}</span><span class="desc"><img src="${t.logo}" alt=""><span>${esc(s.text)}</span></span><span class="sc">${s.as}–${s.hs}</span>`;
+      const idx = P.findIndex(p => p.id === s.id);
+      b.addEventListener('click', () => { setPlaying(false); if (idx >= 0) goTo(idx, false); });
+      sp.appendChild(b);
+    }
+    $('note').innerHTML = D.note;
+  };
 
-  goTo(0, true);
+  /* everything derived from the play list; re-run when a live payload replaces it */
+  const rebuild = () => { indexPlays(); scrub.max = P.length - 1; buildChips(); buildLog(); buildSummary(); setMeta(); };
+
+  /* ---------- live feed ----------
+     A page written by `replay --live` carries D.live = {seq, state, polledUtc, interval, url}. It polls
+     `url` (the same payload, served next to the page) and, when `seq` changes, swaps the play list in:
+     new plays are appended, revised plays replaced. Sitting on the last play means "follow": new plays
+     animate in as they arrive; scrubbed back, they queue on the Jump-to-live button instead. */
+  const badge = $('liveBadge'), btnLive = $('btnLive');
+  let pending = 0, lastAt = Date.now(), offline = false;
+  const liveLabel = () => {
+    if (!D.live) return;
+    if (cur >= P.length - 1) pending = 0;
+    const st = D.live.state, last = P[P.length - 1], s = Math.max(0, Math.round((Date.now() - lastAt) / 1000));
+    badge.dataset.state = st;
+    $('liveText').textContent = st === 'post' ? 'Final' : st === 'pre' ? 'Pregame' : 'Live';
+    const parts = [`${away.abbr} ${away.score} · ${home.abbr} ${home.score}`];
+    if (st !== 'post') parts.push(`Q${last.per} ${last.clk}`, offline ? 'feed offline · retrying' : `updated ${s}s ago`);
+    $('liveDetail').textContent = parts.join(' · ');
+    btnLive.textContent = pending > 0 ? `● ${pending} new play${pending === 1 ? '' : 's'}` : '● Jump to live';
+    btnLive.classList.toggle('pulse', pending > 0);
+    btnLive.disabled = cur >= P.length - 1;
+  };
+  const applyLive = next => {
+    const oldIds = new Set(P.map(p => p.id)), curId = cur >= 0 && P[cur] ? P[cur].id : null;
+    const curJson = cur >= 0 && P[cur] ? JSON.stringify(P[cur]) : null, atEnd = cur >= P.length - 1;
+    D = next; P = next.plays; DR = next.drives;
+    for (const id in next.teams) { if (T[id]) Object.assign(T[id], next.teams[id]); else T[id] = next.teams[id]; }
+    rebuild();
+    const firstNew = P.findIndex(p => !oldIds.has(p.id)), added = P.filter(p => !oldIds.has(p.id)).length;
+    let idx = curId ? P.findIndex(p => p.id === curId) : -1;
+    if (idx < 0) idx = clamp(cur, 0, P.length - 1);
+    if (atEnd && firstNew >= 0) { pending = 0; playing = true; $('btnPlay').textContent = '❚❚ Pause'; goTo(firstNew, false); return; }
+    pending += added;
+    if (!playing && (idx !== cur || JSON.stringify(P[idx]) !== curJson)) goTo(idx, true);
+    else { cur = idx; setPos(idx); markLog(idx, true); markQ(P[idx].per); liveLabel(); }
+  };
+  const pollLive = async () => {
+    if (!isLive()) return;
+    try {
+      const r = await fetch(`${D.live.url}?t=${Date.now()}`, { cache: 'no-store' });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const next = await r.json();
+      offline = false;
+      if (next.live) lastAt = Date.parse(next.live.polledUtc) || Date.now();   // freshness of the ESPN poll itself
+      if (next.live && next.live.seq !== D.live.seq) applyLive(next);          // content changed: swap it in
+    } catch (e) { offline = true; }
+    liveLabel();
+    if (isLive()) setTimeout(pollLive, pollMs());
+  };
+  // poll the local file at half the ESPN cadence so a new payload waits at most half an interval
+  const pollMs = () => Math.max(3, (D.live.interval || 15) / 2) * 1000;
+  if (D.live) {
+    badge.hidden = false; btnLive.hidden = false;
+    lastAt = Date.parse(D.live.polledUtc) || Date.now();
+    btnLive.addEventListener('click', () => { setPlaying(false); goTo(P.length - 1, true); });
+    if (isLive()) { setTimeout(pollLive, pollMs()); setInterval(liveLabel, 1000); }
+  }
+
+  rebuild();
+  goTo(isLive() ? P.length - 1 : 0, true);
 })();
 </script>

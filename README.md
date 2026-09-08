@@ -52,6 +52,7 @@ ncaaf-clv/
 │   ├── weather/validate.py   25 checks: game/team/venue join, coverage, hour window, value ranges
 │   ├── replay/build.py       play-by-play -> replay data (clock order, ball-spot repair, win-prob carry) -> HTML
 │   ├── replay/template.html  the replay page: field in team colours, score bug, drive chart, transport, drive log
+│   ├── replay/live.py        follow in-progress games: poll ESPN -> live-<tag> snapshot -> <id>.json/.html served on localhost
 │   ├── storage.py            SQLite loader (INSERT OR REPLACE keyed on natural key + snapshot_utc)
 │   ├── schema.sql            tables for every JSON row type + `v_game_lines` convenience view
 │   └── cli.py                argparse wiring only
@@ -89,6 +90,9 @@ uv run ncaaf-clv refresh --db data/ncaaf_clv.db          # --dry-run lists the o
 # 6. Watch any collected game: self-contained HTML replay (animated field in team colours, scoreboard,
 #    drive chart, ESPN win probability, drive log) -> data/processed/replays/<espn-snapshot>/<game_id>.html
 uv run ncaaf-clv replay --espn-snapshot refresh-<tag> --game-id 401856635 --open   # or --all
+# 7. Follow a game as it is played: poll ESPN every 15 s, rebuild the page as plays arrive and serve it on
+#    http://127.0.0.1:8765/<game_id>.html until the game is final (--all --db: every open game near kickoff)
+uv run ncaaf-clv replay --live --game-id 401858212 --open
 ```
 
 Every command is also available as `uv run python -m ncaaf_clv <command> ...` — the same entry point without
@@ -103,6 +107,16 @@ and clock (ESPN lists a timeout after the play it preceded), the ball spot after
 the next snap (ESPN's `end_yard_line` is 0 on some penalties and turnovers), timeouts and quarter ends
 hold the previous state, and the pre-snap clock is parsed from the `(MM:SS)` prefix of the play text so
 the scoreboard clock runs during the play.
+
+`replay --live` follows in-progress games. Every `--interval` seconds (default 15; ESPN caches the summary
+for 10) it re-fetches each game's summary into a `live-<tag>` snapshot, rebuilds the payload and rewrites
+`<game_id>.json` and `<game_id>.html` under `data/processed/replays/live-<tag>/`, and serves that directory
+on `http://127.0.0.1:<port>/` (`--port`, default 8765; `index.html` lists the games). The page polls the
+JSON and swaps the play list in when it changes: sitting on the last play means "follow", so new plays
+animate in as they arrive; scrubbed back, they queue on the Jump-to-live button. A game that has not
+kicked off is checked once a minute. The loop exits once every game is final, leaving the finished replay
+on disk; nothing is loaded into SQLite (`refresh` does that). `--all --db PATH` follows every open game
+kicking off within 30 minutes or up to 6 hours ago.
 
 `refresh` takes the open set from the database (each game's latest `espn_games` row with
 `status_state != 'post'`, so cancelled/postponed games are not retried), fetches the scoreboard for the

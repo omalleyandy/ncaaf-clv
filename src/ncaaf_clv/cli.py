@@ -13,6 +13,7 @@ ncaaf-clv weather observed  [--espn-snapshot TAG] [--snapshot TAG] [--game-id ID
 ncaaf-clv weather validate  --weather PATH [--espn-snapshot TAG] [--db PATH]
 ncaaf-clv load-db   ... [--weather PATH] [--weather-report PATH] [--locations PATH]
 ncaaf-clv replay    [--espn-snapshot TAG] (--game-id ID ... | --all) [--out DIR] [--no-logos] [--open]
+ncaaf-clv replay    --live (--game-id ID ... | --all --db PATH) [--interval S] [--port N] [--out DIR] [--open]
 """
 
 from __future__ import annotations
@@ -33,6 +34,7 @@ from ncaaf_clv.espn.collect import run_backfill_pipeline, run_espn_pipeline
 from ncaaf_clv.espn.refresh import open_games, run_refresh_pipeline
 from ncaaf_clv.overtime.parse import parse_overtime_dump
 from ncaaf_clv.replay.build import default_snapshot, espn_snapshot_dir, list_game_ids, run_replay
+from ncaaf_clv.replay.live import DEFAULT_INTERVAL_S, DEFAULT_PORT, open_games_near_kickoff, run_live
 from ncaaf_clv.resolve.game_join import join_overtime_to_espn
 from ncaaf_clv.resolve.team_resolver import TeamResolver
 from ncaaf_clv.validate.validator import validate_snapshot
@@ -189,6 +191,8 @@ def cmd_refresh(args: argparse.Namespace, settings: Settings) -> int:
 
 def cmd_replay(args: argparse.Namespace, settings: Settings) -> int:
     """Self-contained HTML replay (scoreboard, field, drive chart, win %) for collected games."""
+    if args.live:
+        return _cmd_replay_live(args, settings)
     espn_snapshot = args.espn_snapshot or default_snapshot(settings)
     if not espn_snapshot:
         log.error("no ESPN snapshot with game folders under %s", settings.processed_dir / "espn")
@@ -209,6 +213,47 @@ def cmd_replay(args: argparse.Namespace, settings: Settings) -> int:
         for w in manifest["written"]:
             webbrowser.open(Path(w["path"]).resolve().as_uri())
     return 0 if manifest["written"] else 1
+
+
+def _cmd_replay_live(args: argparse.Namespace, settings: Settings) -> int:
+    """Follow in-progress games: poll ESPN, rebuild each page as plays arrive, serve them on localhost."""
+    game_ids = list(args.game_id or [])
+    if args.all:
+        if not args.db:
+            log.error("--live --all takes the open games from SQLite: pass --db PATH")
+            return 1
+        conn = storage.connect(Path(args.db))
+        try:
+            game_ids += open_games_near_kickoff(conn, settings.season_year)
+        finally:
+            conn.close()
+    if not game_ids:
+        log.error("nothing to follow: pass --game-id (repeatable) or --all --db PATH (no open game near kickoff)")
+        return 1
+    try:
+        manifest = asyncio.run(
+            run_live(
+                settings,
+                game_ids,
+                snapshot=args.espn_snapshot,
+                out_dir=Path(args.out) if args.out else None,
+                interval=args.interval,
+                port=args.port,
+                logos=not args.no_logos,
+                open_browser=args.open,
+            )
+        )
+    except BlockedError as exc:
+        log.error("live stopped: %s", exc)
+        return 2
+    except OSError as exc:  # typically the port is taken
+        log.error("live: %s (is port %d free? pass --port)", exc, args.port)
+        return 1
+    except KeyboardInterrupt:
+        log.info("live: stopped")
+        return 0
+    print(json.dumps(manifest, indent=2))
+    return 0
 
 
 # ------------------------------------------------------------------------ weather
@@ -423,12 +468,40 @@ def build_parser() -> argparse.ArgumentParser:
         help="self-contained HTML replay of collected games: animated field in team colours, scoreboard, "
         "drive chart, win probability -> data/processed/replays/<espn-snapshot>/<game_id>.html",
     )
-    s.add_argument("--espn-snapshot", help="snapshot holding games/<id>/ (default: most recently written)")
+    s.add_argument(
+        "--espn-snapshot",
+        help="snapshot holding games/<id>/ (default: most recently written); with --live, the name of the "
+        "live snapshot to write (default: live-<now>)",
+    )
     s.add_argument("--game-id", action="append", help="ESPN game id (repeatable)")
-    s.add_argument("--all", action="store_true", help="every game in the snapshot that has plays")
+    s.add_argument(
+        "--all",
+        action="store_true",
+        help="every game in the snapshot that has plays; with --live, every open game in --db kicking off "
+        "within 30 min or up to 6 h ago",
+    )
     s.add_argument("--out", help="output directory (default: data/processed/replays/<espn-snapshot>)")
     s.add_argument("--no-logos", action="store_true", help="skip logo download; use coloured abbreviation badges")
     s.add_argument("--open", action="store_true", help="open each written page in the default browser")
+    s.add_argument(
+        "--live",
+        action="store_true",
+        help="follow the games as they are played: poll ESPN every --interval seconds, rebuild each page as "
+        "plays arrive and serve the pages on http://127.0.0.1:<port>/ until every game is final",
+    )
+    s.add_argument("--db", help="--live --all: SQLite file to take the open games from")
+    s.add_argument(
+        "--interval",
+        type=float,
+        default=DEFAULT_INTERVAL_S,
+        help="--live: seconds between ESPN polls (default %(default)s)",
+    )
+    s.add_argument(
+        "--port",
+        type=int,
+        default=DEFAULT_PORT,
+        help="--live: local port for the pages (default %(default)s; 0 = any free port)",
+    )
     s.set_defaults(func=cmd_replay)
 
     w = sub.add_parser("weather", help="AccuWeather hourly weather around kickoff for outdoor FBS games")
