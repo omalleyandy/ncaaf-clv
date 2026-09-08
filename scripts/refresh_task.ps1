@@ -1,7 +1,7 @@
 # Scheduled refresh of the NCAAF games that are not yet final in SQLite.
 #
 # Registered in Windows Task Scheduler as "ncaaf-clv refresh" (Monday and Tuesday 07:00 local time);
-# see README "Run" step 5. Runs `uv run ncaaf-clv refresh --db data/ncaaf_clv.db` from the repo root
+# see README "Run" step 5. Runs `uv run python -m ncaaf_clv refresh --db data/ncaaf_clv.db` from the repo root
 # and appends stdout/stderr to data/logs/refresh-<yyyyMM>.log. Exit code is the CLI's:
 # 0 ok, 1 some game summaries failed to fetch, 2 ESPN blocked the run (database unchanged; re-run later).
 
@@ -19,7 +19,7 @@ if (-not $uv) {
 }
 
 "===== $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss zzz') refresh start ($uv) =====" | Add-Content $log
-& $uv run ncaaf-clv refresh --db data/ncaaf_clv.db 2>&1 | ForEach-Object { "$_" } | Add-Content $log
+& $uv run python -m ncaaf_clv refresh --db data/ncaaf_clv.db 2>&1 | ForEach-Object { "$_" } | Add-Content $log
 $code = $LASTEXITCODE
 "===== $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss zzz') refresh end (exit $code) =====" | Add-Content $log
 exit $code
